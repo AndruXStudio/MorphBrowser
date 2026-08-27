@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -9,6 +8,8 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../models/browser_models.dart';
 import '../services/storage_service.dart';
+
+const kHome = 'about:home';
 
 class BrowserHome extends StatefulWidget {
   const BrowserHome({super.key});
@@ -22,6 +23,7 @@ class _BrowserHomeState extends State<BrowserHome> {
   final _uuid = const Uuid();
   final _searchCtrl = TextEditingController();
   final _searchFocus = FocusNode();
+  final _homeSearchCtrl = TextEditingController();
 
   final List<BrowserTab> _tabs = [];
   final Map<String, WebViewController> _controllers = {};
@@ -30,7 +32,6 @@ class _BrowserHomeState extends State<BrowserHome> {
 
   List<BookmarkItem> _bookmarks = [];
   List<HistoryItem> _history = [];
-  String _homeUrl = 'https://www.google.com';
   String _searchEngine = 'google';
   bool _desktopMode = false;
   bool _showConsole = false;
@@ -42,8 +43,20 @@ class _BrowserHomeState extends State<BrowserHome> {
   static const _desktopUa =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
+  static const _shortcuts = [
+    _Shortcut('Google', 'https://www.google.com', Icons.search_rounded, Color(0xFF4285F4)),
+    _Shortcut('Bing', 'https://www.bing.com', Icons.language_rounded, Color(0xFF008373)),
+    _Shortcut('DuckDuckGo', 'https://duckduckgo.com', Icons.privacy_tip_outlined, Color(0xFFDE5833)),
+    _Shortcut('百度', 'https://www.baidu.com', Icons.public_rounded, Color(0xFF2932E1)),
+    _Shortcut('GitHub', 'https://github.com', Icons.code_rounded, Color(0xFF333333)),
+    _Shortcut('Bilibili', 'https://www.bilibili.com', Icons.play_circle_outline, Color(0xFFFB7299)),
+    _Shortcut('知乎', 'https://www.zhihu.com', Icons.forum_outlined, Color(0xFF0084FF)),
+    _Shortcut('维基', 'https://zh.wikipedia.org', Icons.menu_book_rounded, Color(0xFF000000)),
+  ];
+
   BrowserTab get tab => _tabs[_active];
   WebViewController? get ctrl => _controllers[tab.id];
+  bool get isStartPage => tab.url == kHome || tab.url.startsWith('about:');
 
   @override
   void initState() {
@@ -52,24 +65,28 @@ class _BrowserHomeState extends State<BrowserHome> {
   }
 
   Future<void> _bootstrap() async {
-    _homeUrl = await _storage.loadHomeUrl();
     _searchEngine = await _storage.loadSearchEngine();
     _bookmarks = await _storage.loadBookmarks();
     _history = await _storage.loadHistory();
-    _newTab(incognito: false, initialUrl: _homeUrl);
+    _newTab(incognito: false);
     if (mounted) setState(() {});
   }
 
-  String _searchUrl(String q) {
-    final t = q.trim();
-    if (t.isEmpty) return _homeUrl;
-    final looksUrl = t.contains('.') && !t.contains(' ') ||
+  String _normalizeUrl(String input) {
+    var t = input.trim();
+    if (t.isEmpty) return kHome;
+    if (t == kHome || t.startsWith('about:')) return t;
+
+    final looksUrl = (!t.contains(' ') && t.contains('.')) ||
         t.startsWith('http://') ||
         t.startsWith('https://');
+
     if (looksUrl) {
-      if (t.startsWith('http')) return t;
+      if (t.startsWith('https://')) return t;
+      if (t.startsWith('http://')) return 'https://${t.substring(7)}';
       return 'https://$t';
     }
+
     final enc = Uri.encodeComponent(t);
     switch (_searchEngine) {
       case 'bing':
@@ -85,15 +102,17 @@ class _BrowserHomeState extends State<BrowserHome> {
 
   void _newTab({bool incognito = false, String? initialUrl}) {
     final id = _uuid.v4();
+    final start = initialUrl ?? kHome;
     final t = BrowserTab(
       id: id,
-      url: initialUrl ?? _homeUrl,
+      url: start,
       isIncognito: incognito,
       title: incognito ? '无痕标签' : '新标签页',
     );
+
     final c = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.transparent)
+      ..setBackgroundColor(const Color(0x00000000))
       ..setUserAgent(_desktopMode ? _desktopUa : _mobileUa)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -106,29 +125,41 @@ class _BrowserHomeState extends State<BrowserHome> {
             if (i < 0) return;
             setState(() {
               _tabs[i].isLoading = true;
-              _tabs[i].url = url;
-              if (_active == i) _searchCtrl.text = url;
+              if (!url.startsWith('about:')) {
+                _tabs[i].url = url;
+                if (_active == i) _searchCtrl.text = url;
+              }
             });
           },
           onPageFinished: (url) async {
             final i = _tabs.indexWhere((e) => e.id == id);
             if (i < 0) return;
-            final title = await _controllers[id]?.getTitle() ?? url;
+            String title = url;
+            try {
+              title = await _controllers[id]?.getTitle() ?? url;
+            } catch (_) {}
             final back = await _controllers[id]?.canGoBack() ?? false;
             final fwd = await _controllers[id]?.canGoForward() ?? false;
             setState(() {
               _tabs[i].isLoading = false;
-              _tabs[i].url = url;
-              _tabs[i].title = title.isEmpty ? url : title;
+              if (!url.startsWith('about:')) {
+                _tabs[i].url = url;
+                _tabs[i].title =
+                    (title.isEmpty || title == 'about:blank') ? url : title;
+                if (_active == i) {
+                  _searchCtrl.text = url;
+                  _progress = 0;
+                }
+              } else {
+                _tabs[i].title = _tabs[i].isIncognito ? '无痕标签' : '新标签页';
+              }
               _tabs[i].canGoBack = back;
               _tabs[i].canGoForward = fwd;
-              if (_active == i) {
-                _searchCtrl.text = url;
-                _progress = 0;
-              }
             });
-            if (!_tabs[i].isIncognito) {
-              _addHistory(title.isEmpty ? url : title, url);
+            if (!_tabs[i].isIncognito &&
+                !url.startsWith('about:') &&
+                url.isNotEmpty) {
+              _addHistory(_tabs[i].title, url);
             }
             await _injectConsoleHook(id);
           },
@@ -151,20 +182,24 @@ class _BrowserHomeState extends State<BrowserHome> {
             _pushConsole(id, 'log', msg.message);
           }
         },
-      )
-      ..loadRequest(Uri.parse(t.url));
+      );
+
+    if (start != kHome && !start.startsWith('about:')) {
+      c.loadRequest(Uri.parse(start));
+    }
 
     _controllers[id] = c;
     _console[id] = [];
     setState(() {
       _tabs.add(t);
       _active = _tabs.length - 1;
-      _searchCtrl.text = t.url;
+      _searchCtrl.text = start == kHome ? '' : start;
+      _homeSearchCtrl.clear();
     });
   }
 
   Future<void> _injectConsoleHook(String id) async {
-    const js = r'''
+    const js = r"""
 (function(){
   if(window.__morphConsole) return;
   window.__morphConsole=1;
@@ -184,7 +219,7 @@ class _BrowserHomeState extends State<BrowserHome> {
   console.error=function(){send('error',arguments);return e.apply(console,arguments);};
   console.info=function(){send('info',arguments);return i.apply(console,arguments);};
 })();
-''';
+""";
     try {
       await _controllers[id]?.runJavaScript(js);
     } catch (_) {}
@@ -198,6 +233,7 @@ class _BrowserHomeState extends State<BrowserHome> {
   }
 
   Future<void> _addHistory(String title, String url) async {
+    _history.removeWhere((h) => h.url == url);
     _history.insert(
       0,
       HistoryItem(id: _uuid.v4(), title: title, url: url),
@@ -208,7 +244,7 @@ class _BrowserHomeState extends State<BrowserHome> {
   void _closeTab(int index) {
     if (_tabs.length == 1) {
       final old = _tabs[0];
-      _controllers.remove(old.id)?.clearLocalStorage();
+      _controllers.remove(old.id);
       _console.remove(old.id);
       _tabs.clear();
       _newTab();
@@ -221,21 +257,32 @@ class _BrowserHomeState extends State<BrowserHome> {
       _tabs.removeAt(index);
       if (_active >= _tabs.length) _active = _tabs.length - 1;
       if (_active < 0) _active = 0;
-      _searchCtrl.text = _tabs[_active].url;
+      final u = _tabs[_active].url;
+      _searchCtrl.text = u == kHome ? '' : u;
     });
   }
 
   Future<void> _go(String input) async {
-    final url = _searchUrl(input);
-    await ctrl?.loadRequest(Uri.parse(url));
+    final url = _normalizeUrl(input);
+    if (url == kHome) {
+      setState(() {
+        tab.url = kHome;
+        tab.title = tab.isIncognito ? '无痕标签' : '新标签页';
+        _searchCtrl.text = '';
+        _progress = 0;
+      });
+      return;
+    }
     setState(() {
       tab.url = url;
       _searchCtrl.text = url;
     });
+    await ctrl?.loadRequest(Uri.parse(url));
     _searchFocus.unfocus();
   }
 
   Future<void> _toggleBookmark() async {
+    if (isStartPage) return;
     final url = tab.url;
     final exists = _bookmarks.any((b) => b.url == url);
     if (exists) {
@@ -255,6 +302,7 @@ class _BrowserHomeState extends State<BrowserHome> {
   }
 
   Future<void> _viewSource() async {
+    if (isStartPage) return;
     final html = await ctrl?.runJavaScriptReturningResult(
           'document.documentElement.outerHTML',
         ) ??
@@ -276,6 +324,7 @@ class _BrowserHomeState extends State<BrowserHome> {
   }
 
   Future<void> _findInPage() async {
+    if (isStartPage) return;
     final q = await showDialog<String>(
       context: context,
       builder: (ctx) {
@@ -379,9 +428,7 @@ class _BrowserHomeState extends State<BrowserHome> {
                 ),
                 ListTile(
                   leading: Icon(
-                    _showConsole
-                        ? Icons.terminal_rounded
-                        : Icons.terminal_outlined,
+                    _showConsole ? Icons.terminal_rounded : Icons.terminal_outlined,
                   ),
                   title: Text(_showConsole ? '隐藏控制台' : '显示控制台'),
                   onTap: () {
@@ -410,7 +457,7 @@ class _BrowserHomeState extends State<BrowserHome> {
                     await ctrl?.setUserAgent(
                       _desktopMode ? _desktopUa : _mobileUa,
                     );
-                    await ctrl?.reload();
+                    if (!isStartPage) await ctrl?.reload();
                   },
                 ),
                 ListTile(
@@ -418,7 +465,7 @@ class _BrowserHomeState extends State<BrowserHome> {
                   title: const Text('分享'),
                   onTap: () {
                     Navigator.pop(ctx);
-                    Share.share(tab.url, subject: tab.title);
+                    if (!isStartPage) Share.share(tab.url, subject: tab.title);
                   },
                 ),
                 ListTile(
@@ -426,10 +473,12 @@ class _BrowserHomeState extends State<BrowserHome> {
                   title: const Text('复制链接'),
                   onTap: () {
                     Navigator.pop(ctx);
-                    Clipboard.setData(ClipboardData(text: tab.url));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制链接')),
-                    );
+                    if (!isStartPage) {
+                      Clipboard.setData(ClipboardData(text: tab.url));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('已复制链接')),
+                      );
+                    }
                   },
                 ),
                 ListTile(
@@ -500,26 +549,28 @@ class _BrowserHomeState extends State<BrowserHome> {
                         leading: Icon(
                           t.isIncognito
                               ? Icons.visibility_off_rounded
-                              : Icons.public_rounded,
+                              : (t.url == kHome
+                                  ? Icons.home_rounded
+                                  : Icons.public_rounded),
                         ),
                         title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(t.url, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(
+                          t.url == kHome ? '起始页' : t.url,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         trailing: IconButton(
                           icon: const Icon(Icons.close),
                           onPressed: () {
                             _closeTab(i);
-                            if (_tabs.isEmpty) {
-                              Navigator.pop(ctx);
-                            } else {
-                              (ctx as Element).markNeedsBuild();
-                              setState(() {});
-                            }
+                            setState(() {});
                           },
                         ),
                         onTap: () {
                           setState(() {
                             _active = i;
-                            _searchCtrl.text = _tabs[i].url;
+                            final u = _tabs[i].url;
+                            _searchCtrl.text = u == kHome ? '' : u;
                           });
                           Navigator.pop(ctx);
                         },
@@ -600,37 +651,8 @@ class _BrowserHomeState extends State<BrowserHome> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                title: const Text('主页地址'),
-                subtitle: Text(_homeUrl),
-                onTap: () async {
-                  final c = TextEditingController(text: _homeUrl);
-                  final v = await showDialog<String>(
-                    context: ctx,
-                    builder: (d) => AlertDialog(
-                      title: const Text('主页'),
-                      content: TextField(controller: c),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(d),
-                          child: const Text('取消'),
-                        ),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(d, c.text),
-                          child: const Text('保存'),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (v != null && v.trim().isNotEmpty) {
-                    _homeUrl = _searchUrl(v.trim());
-                    await _storage.saveHomeUrl(_homeUrl);
-                    setState(() {});
-                  }
-                },
-              ),
-              ListTile(
                 title: const Text('搜索引擎'),
-                subtitle: Text(_searchEngine),
+                subtitle: Text(_engineLabel(_searchEngine)),
                 onTap: () async {
                   final v = await showModalBottomSheet<String>(
                     context: ctx,
@@ -662,7 +684,7 @@ class _BrowserHomeState extends State<BrowserHome> {
               ),
               const ListTile(
                 title: Text('Morph Browser'),
-                subtitle: Text('Material 3 · 标签 · 无痕 · 收藏 · 历史 · 控制台 · 源码'),
+                subtitle: Text('起始页 · 标签 · 无痕 · 收藏 · 历史 · 控制台 · 源码'),
               ),
             ],
           ),
@@ -671,10 +693,24 @@ class _BrowserHomeState extends State<BrowserHome> {
     );
   }
 
+  String _engineLabel(String id) {
+    switch (id) {
+      case 'bing':
+        return 'Bing';
+      case 'duck':
+        return 'DuckDuckGo';
+      case 'baidu':
+        return '百度';
+      default:
+        return 'Google';
+    }
+  }
+
   @override
   void dispose() {
     _searchCtrl.dispose();
     _searchFocus.dispose();
+    _homeSearchCtrl.dispose();
     super.dispose();
   }
 
@@ -691,122 +727,103 @@ class _BrowserHomeState extends State<BrowserHome> {
       body: SafeArea(
         child: Column(
           children: [
-            // Top bar
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+              padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
               child: Row(
                 children: [
-                  MorphScaleIconButton(
+                  _IconBtn(
                     icon: Icons.arrow_back_rounded,
                     tooltip: '后退',
-                    onPressed: tab.canGoBack ? () => ctrl?.goBack() : null,
+                    onPressed: !isStartPage && tab.canGoBack ? () => ctrl?.goBack() : null,
                   ),
-                  MorphScaleIconButton(
+                  _IconBtn(
                     icon: Icons.arrow_forward_rounded,
                     tooltip: '前进',
-                    onPressed: tab.canGoForward ? () => ctrl?.goForward() : null,
+                    onPressed: !isStartPage && tab.canGoForward ? () => ctrl?.goForward() : null,
                   ),
-                  MorphScaleIconButton(
-                    icon: tab.isLoading
-                        ? Icons.close_rounded
-                        : Icons.refresh_rounded,
+                  _IconBtn(
+                    icon: tab.isLoading ? Icons.close_rounded : Icons.refresh_rounded,
                     tooltip: tab.isLoading ? '停止' : '刷新',
-                    onPressed: () {
-                      if (tab.isLoading) {
-                        ctrl?.loadRequest(Uri.parse('about:blank'));
-                      } else {
-                        ctrl?.reload();
-                      }
-                    },
+                    onPressed: isStartPage
+                        ? null
+                        : () {
+                            if (tab.isLoading) {
+                              ctrl?.loadRequest(Uri.parse('about:blank'));
+                            } else {
+                              ctrl?.reload();
+                            }
+                          },
                   ),
-                  Expanded(
-                    child: SearchBar(
-                      controller: _searchCtrl,
-                      focusNode: _searchFocus,
-                      hintText: tab.isIncognito ? '无痕搜索或输入网址' : '搜索或输入网址',
-                      leading: Icon(
-                        tab.isIncognito
-                            ? Icons.visibility_off_rounded
-                            : Icons.search_rounded,
-                        size: 20,
-                      ),
-                      trailing: [
-                        if (_searchCtrl.text.isNotEmpty)
-                          IconButton(
-                            icon: const Icon(Icons.clear_rounded, size: 20),
-                            onPressed: () {
-                              _searchCtrl.clear();
-                              setState(() {});
-                            },
-                          ),
-                        IconButton(
-                          icon: Icon(
-                            bookmarked
-                                ? Icons.star_rounded
-                                : Icons.star_outline_rounded,
-                            size: 20,
-                            color: bookmarked ? cs.primary : null,
-                          ),
-                          onPressed: _toggleBookmark,
-                        ),
-                      ],
-                      onChanged: (_) => setState(() {}),
-                      onSubmitted: _go,
-                      elevation: const WidgetStatePropertyAll(0),
-                      backgroundColor:
-                          WidgetStatePropertyAll(cs.surfaceContainerHighest),
-                      padding: const WidgetStatePropertyAll(
-                        EdgeInsets.symmetric(horizontal: 8),
-                      ),
-                      constraints: const BoxConstraints(
-                        minHeight: 48,
-                        maxHeight: 48,
-                      ),
-                    ),
-                  ),
-                  MorphScaleIconButton(
-                    icon: Icons.tab_rounded,
-                    tooltip: '标签',
-                    onPressed: _openTabsSheet,
-                  ),
-                  Badge(
-                    isLabelVisible: _tabs.length > 1,
-                    label: Text('${_tabs.length}'),
-                    child: MorphScaleIconButton(
-                      icon: Icons.more_vert_rounded,
-                      tooltip: '菜单',
-                      onPressed: _openMenu,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (_progress > 0 && _progress < 1)
-              LinearProgressIndicator(value: _progress, minHeight: 2),
-            // WebView
-            Expanded(
-              child: Stack(
-                children: [
-                  IndexedStack(
-                    index: _active,
-                    children: [
-                      for (final t in _tabs)
-                        WebViewWidget(controller: _controllers[t.id]!),
-                    ],
-                  ),
+                  const Spacer(),
                   if (tab.isIncognito)
-                    Positioned(
-                      top: 8,
-                      right: 8,
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
                       child: Chip(
-                        avatar: const Icon(Icons.visibility_off, size: 16),
-                        label: const Text('无痕'),
+                        avatar: const Icon(Icons.visibility_off, size: 14),
+                        label: const Text('无痕', style: TextStyle(fontSize: 12)),
                         visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
                         backgroundColor: cs.secondaryContainer,
                       ),
                     ),
+                  _IconBtn(icon: Icons.tab_rounded, tooltip: '标签 ${_tabs.length}', onPressed: _openTabsSheet),
+                  _IconBtn(icon: Icons.more_vert_rounded, tooltip: '菜单', onPressed: _openMenu),
                 ],
               ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+              child: SearchBar(
+                controller: _searchCtrl,
+                focusNode: _searchFocus,
+                hintText: isStartPage
+                    ? (tab.isIncognito ? '无痕搜索或输入网址' : '搜索或输入网址')
+                    : null,
+                leading: Icon(
+                  tab.isIncognito ? Icons.visibility_off_rounded : Icons.search_rounded,
+                  size: 22,
+                ),
+                trailing: [
+                  if (_searchCtrl.text.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.clear_rounded, size: 20),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        setState(() {});
+                      },
+                    ),
+                  if (!isStartPage)
+                    IconButton(
+                      icon: Icon(
+                        bookmarked ? Icons.star_rounded : Icons.star_outline_rounded,
+                        size: 22,
+                        color: bookmarked ? cs.primary : null,
+                      ),
+                      onPressed: _toggleBookmark,
+                    ),
+                ],
+                onChanged: (_) => setState(() {}),
+                onSubmitted: _go,
+                elevation: const WidgetStatePropertyAll(0),
+                backgroundColor: WidgetStatePropertyAll(cs.surfaceContainerHighest),
+                padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
+                constraints: const BoxConstraints(minHeight: 52, maxHeight: 52),
+              ),
+            ),
+            if (_progress > 0 && _progress < 1 && !isStartPage)
+              LinearProgressIndicator(value: _progress, minHeight: 2),
+            Expanded(
+              child: isStartPage
+                  ? _buildStartPage(cs)
+                  : IndexedStack(
+                      index: _active,
+                      children: [
+                        for (final t in _tabs)
+                          (t.url == kHome || t.url.startsWith('about:'))
+                              ? const SizedBox.shrink()
+                              : WebViewWidget(controller: _controllers[t.id]!),
+                      ],
+                    ),
             ),
             if (_showConsole) _buildConsole(cs),
           ],
@@ -818,7 +835,7 @@ class _BrowserHomeState extends State<BrowserHome> {
         onDestinationSelected: (i) {
           switch (i) {
             case 0:
-              _go(_homeUrl);
+              _go(kHome);
             case 1:
               _openBookmarks();
             case 2:
@@ -830,32 +847,143 @@ class _BrowserHomeState extends State<BrowserHome> {
           }
         },
         destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: '主页',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.bookmarks_outlined),
-            selectedIcon: Icon(Icons.bookmarks_rounded),
-            label: '收藏',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.add_circle_outline),
-            selectedIcon: Icon(Icons.add_circle),
-            label: '新建',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history),
-            selectedIcon: Icon(Icons.history_rounded),
-            label: '历史',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.menu_rounded),
-            selectedIcon: Icon(Icons.menu_open_rounded),
-            label: '菜单',
-          ),
+          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: '主页'),
+          NavigationDestination(icon: Icon(Icons.bookmarks_outlined), selectedIcon: Icon(Icons.bookmarks_rounded), label: '收藏'),
+          NavigationDestination(icon: Icon(Icons.add_circle_outline), selectedIcon: Icon(Icons.add_circle), label: '新建'),
+          NavigationDestination(icon: Icon(Icons.history), selectedIcon: Icon(Icons.history_rounded), label: '历史'),
+          NavigationDestination(icon: Icon(Icons.menu_rounded), selectedIcon: Icon(Icons.menu_open_rounded), label: '菜单'),
         ],
+      ),
+    );
+  }
+
+  Widget _buildStartPage(ColorScheme cs) {
+    final recent = _history.take(6).toList();
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 28),
+            Text(
+              tab.isIncognito ? '无痕模式' : 'Morph',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: tab.isIncognito ? cs.tertiary : cs.primary,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              tab.isIncognito ? '浏览记录不会被保存' : '搜索或输入网址',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 28),
+            SearchBar(
+              controller: _homeSearchCtrl,
+              hintText: '搜索 ${_engineLabel(_searchEngine)} 或输入网址',
+              leading: const Icon(Icons.search_rounded),
+              trailing: [
+                if (_homeSearchCtrl.text.isNotEmpty)
+                  IconButton(
+                    icon: const Icon(Icons.clear_rounded),
+                    onPressed: () {
+                      _homeSearchCtrl.clear();
+                      setState(() {});
+                    },
+                  ),
+              ],
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (v) {
+                _homeSearchCtrl.clear();
+                _go(v);
+              },
+              elevation: const WidgetStatePropertyAll(1),
+              padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16)),
+              constraints: const BoxConstraints(minHeight: 56, maxHeight: 56),
+            ),
+            const SizedBox(height: 32),
+            Text('快捷方式', style: Theme.of(context).textTheme.titleSmall?.copyWith(color: cs.onSurfaceVariant)),
+            const SizedBox(height: 12),
+            GridView.count(
+              crossAxisCount: 4,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.85,
+              children: [
+                for (final s in _shortcuts)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => _go(s.url),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircleAvatar(
+                          radius: 26,
+                          backgroundColor: s.color.withValues(alpha: 0.15),
+                          child: Icon(s.icon, color: s.color, size: 26),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(s.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.labelMedium),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+            if (recent.isNotEmpty && !tab.isIncognito) ...[
+              const SizedBox(height: 28),
+              Row(
+                children: [
+                  Text('最近访问', style: Theme.of(context).textTheme.titleSmall?.copyWith(color: cs.onSurfaceVariant)),
+                  const Spacer(),
+                  TextButton(onPressed: _openHistory, child: const Text('全部')),
+                ],
+              ),
+              for (final h in recent)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    backgroundColor: cs.surfaceContainerHighest,
+                    child: const Icon(Icons.public, size: 18),
+                  ),
+                  title: Text(h.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(h.url, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  onTap: () => _go(h.url),
+                ),
+            ],
+            if (_bookmarks.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Text('收藏', style: Theme.of(context).textTheme.titleSmall?.copyWith(color: cs.onSurfaceVariant)),
+                  const Spacer(),
+                  TextButton(onPressed: _openBookmarks, child: const Text('全部')),
+                ],
+              ),
+              SizedBox(
+                height: 40,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _bookmarks.length.clamp(0, 12),
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (_, i) {
+                    final b = _bookmarks[i];
+                    return ActionChip(
+                      avatar: const Icon(Icons.star_rounded, size: 16),
+                      label: Text(b.title, maxLines: 1),
+                      onPressed: () => _go(b.url),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -892,7 +1020,7 @@ class _BrowserHomeState extends State<BrowserHome> {
           ),
           Expanded(
             child: logs.isEmpty
-                ? const Center(child: Text('暂无日志（console.log 会显示在这里）'))
+                ? const Center(child: Text('暂无日志'))
                 : ListView.builder(
                     itemCount: logs.length,
                     itemBuilder: (_, i) {
@@ -901,17 +1029,10 @@ class _BrowserHomeState extends State<BrowserHome> {
                       if (l.level == 'error') c = cs.error;
                       if (l.level == 'warn') c = cs.tertiary;
                       return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 2,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
                         child: Text(
                           '[${l.level}] ${l.message}',
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            color: c,
-                          ),
+                          style: TextStyle(fontFamily: 'monospace', fontSize: 12, color: c),
                         ),
                       );
                     },
@@ -923,54 +1044,27 @@ class _BrowserHomeState extends State<BrowserHome> {
   }
 }
 
-/// Scale-tap icon button (Material icons; morph feel without hard dependency).
-class MorphScaleIconButton extends StatefulWidget {
-  const MorphScaleIconButton({
-    super.key,
-    required this.icon,
-    this.onPressed,
-    this.tooltip,
-  });
+class _Shortcut {
+  const _Shortcut(this.label, this.url, this.icon, this.color);
+  final String label;
+  final String url;
+  final IconData icon;
+  final Color color;
+}
 
+class _IconBtn extends StatelessWidget {
+  const _IconBtn({required this.icon, this.onPressed, this.tooltip});
   final IconData icon;
   final VoidCallback? onPressed;
   final String? tooltip;
 
   @override
-  State<MorphScaleIconButton> createState() => _MorphScaleIconButtonState();
-}
-
-class _MorphScaleIconButtonState extends State<MorphScaleIconButton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 120),
-    lowerBound: 0.85,
-    upperBound: 1,
-    value: 1,
-  );
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return ScaleTransition(
-      scale: _c,
-      child: IconButton(
-        tooltip: widget.tooltip,
-        onPressed: widget.onPressed == null
-            ? null
-            : () async {
-                await _c.reverse();
-                await _c.forward();
-                widget.onPressed!();
-              },
-        icon: Icon(widget.icon),
-      ),
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon),
+      visualDensity: VisualDensity.compact,
     );
   }
 }
@@ -1018,7 +1112,7 @@ class _ListScreenState extends State<_ListScreen> {
               itemBuilder: (_, i) {
                 final e = widget.items[i];
                 return Dismissible(
-                  key: ValueKey('${e.url}-$i'),
+                  key: ValueKey('${e.url}-$i-${widget.items.length}'),
                   background: Container(
                     color: Theme.of(context).colorScheme.errorContainer,
                     alignment: Alignment.centerRight,
@@ -1033,8 +1127,7 @@ class _ListScreenState extends State<_ListScreen> {
                   child: ListTile(
                     leading: const Icon(Icons.public),
                     title: Text(e.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                    subtitle:
-                        Text(e.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(e.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
                     onTap: () => widget.onOpen(e.url),
                   ),
                 );

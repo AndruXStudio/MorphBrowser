@@ -22,26 +22,20 @@ jobs:
         run: |
           flutter create --org com.andrux --project-name morph_browser --platforms=android /tmp/mb
           cp -a /tmp/mb/android .
-          # Internet + cleartext (http)
           MANIFEST=android/app/src/main/AndroidManifest.xml
           if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
             sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>\n    <application/' "$MANIFEST"
           fi
-          # usesCleartextTraffic on application tag
           if ! grep -q 'usesCleartextTraffic' "$MANIFEST"; then
             sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
           fi
-          # network security config
           mkdir -p android/app/src/main/res/xml
-          cat > android/app/src/main/res/xml/network_security_config.xml << 'XML'
-<?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
-</network-security-config>
-XML
+          printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<network-security-config>' '    <base-config cleartextTrafficPermitted="true" />' '</network-security-config>' > android/app/src/main/res/xml/network_security_config.xml
           if ! grep -q 'networkSecurityConfig' "$MANIFEST"; then
             sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config"/' "$MANIFEST"
           fi
+          # ensure application has both attrs even if order varies
+          grep -n 'application' "$MANIFEST" | head -5
 
       - name: Install dependencies
         run: flutter pub get

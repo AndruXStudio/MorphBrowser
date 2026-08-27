@@ -11,6 +11,7 @@ import '../models/browser_models.dart';
 import '../services/settings_service.dart';
 import '../services/storage_service.dart';
 import '../widgets/ai_assistant_sheet.dart';
+import '../widgets/floating_window.dart';
 
 const kHome = 'about:home';
 
@@ -612,6 +613,18 @@ class _BrowserHomeState extends State<BrowserHome> {
                   onTap: () {
                     Navigator.pop(ctx);
                     _openThemePicker();
+                  },
+                ),
+
+                ListTile(
+                  leading: const Icon(Icons.layers_rounded),
+                  title: const Text('悬浮窗 UI'),
+                  subtitle: const Text('拖拽 · 缩放 · 侧栏 · 动画开关'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const FloatingWindowHost()),
+                    );
                   },
                 ),
 ListTile(

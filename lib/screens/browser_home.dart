@@ -774,6 +774,51 @@ ListTile(
     );
   }
 
+
+  void _openThemePicker() {
+    final s = context.read<SettingsService>();
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              RadioListTile<ThemeMode>(
+                title: const Text('跟随系统'),
+                value: ThemeMode.system,
+                groupValue: s.themeMode,
+                onChanged: (v) async {
+                  if (v != null) await s.setThemeMode(v);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+              ),
+              RadioListTile<ThemeMode>(
+                title: const Text('浅色'),
+                value: ThemeMode.light,
+                groupValue: s.themeMode,
+                onChanged: (v) async {
+                  if (v != null) await s.setThemeMode(v);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+              ),
+              RadioListTile<ThemeMode>(
+                title: const Text('深色'),
+                value: ThemeMode.dark,
+                groupValue: s.themeMode,
+                onChanged: (v) async {
+                  if (v != null) await s.setThemeMode(v);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   void _openSettings() {
     showModalBottomSheet(
       context: context,

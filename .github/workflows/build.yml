@@ -34,11 +34,21 @@ jobs:
           if ! grep -q 'networkSecurityConfig' "$MANIFEST"; then
             sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config"/' "$MANIFEST"
           fi
-          # ensure application has both attrs even if order varies
-          grep -n 'application' "$MANIFEST" | head -5
+          # NDK version for plugins
+          GRADLE=android/app/build.gradle.kts
+          if [ -f "$GRADLE" ] && ! grep -q 'ndkVersion' "$GRADLE"; then
+            sed -i 's/android {/android {\n    ndkVersion = "27.0.12077973"/' "$GRADLE"
+          fi
+          GRADLE2=android/app/build.gradle
+          if [ -f "$GRADLE2" ] && ! grep -q 'ndkVersion' "$GRADLE2"; then
+            sed -i 's/android {/android {\n    ndkVersion "27.0.12077973"/' "$GRADLE2"
+          fi
 
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos || true
 
       - name: Build APK
         run: flutter build apk --release

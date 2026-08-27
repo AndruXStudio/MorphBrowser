@@ -2,12 +2,15 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../models/browser_models.dart';
+import '../services/settings_service.dart';
 import '../services/storage_service.dart';
+import '../widgets/ai_assistant_sheet.dart';
 
 const kHome = 'about:home';
 
@@ -66,6 +69,10 @@ class _BrowserHomeState extends State<BrowserHome> {
 
   Future<void> _bootstrap() async {
     _searchEngine = await _storage.loadSearchEngine();
+    try {
+      final s = context.read<SettingsService>();
+      if (s.ready) _searchEngine = s.searchEngine;
+    } catch (_) {}
     _bookmarks = await _storage.loadBookmarks();
     _history = await _storage.loadHistory();
     _newTab(incognito: false);
@@ -162,6 +169,7 @@ class _BrowserHomeState extends State<BrowserHome> {
               _addHistory(_tabs[i].title, url);
             }
             await _injectConsoleHook(id);
+            await _applyZoomTo(id);
           },
           onWebResourceError: (err) {
             _pushConsole(id, 'error', err.description);
@@ -357,6 +365,101 @@ class _BrowserHomeState extends State<BrowserHome> {
     await ctrl?.runJavaScript(js);
   }
 
+
+  Future<void> _applyZoomTo(String id) async {
+    try {
+      final z = context.read<SettingsService>().pageZoom;
+      await _controllers[id]?.runJavaScript(
+        "document.documentElement.style.zoom='${z}';",
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _applyZoomAll() async {
+    final z = context.read<SettingsService>().pageZoom;
+    for (final id in _controllers.keys) {
+      try {
+        await _controllers[id]?.runJavaScript(
+          "document.documentElement.style.zoom='${z}';",
+        );
+      } catch (_) {}
+    }
+  }
+
+  void _openAi() {
+    if (isStartPage) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先打开一个网页再使用 AI 助手')),
+      );
+      return;
+    }
+    final s = context.read<SettingsService>();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AiAssistantSheet(
+        controller: ctrl,
+        pageUrl: tab.url,
+        pageTitle: tab.title,
+        settings: s,
+      ),
+    );
+  }
+
+  void _openZoom() {
+    final s = context.read<SettingsService>();
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: StatefulBuilder(
+              builder: (ctx, setS) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('页面缩放', style: Theme.of(ctx).textTheme.titleLarge),
+                    const SizedBox(height: 12),
+                    Text('${(s.pageZoom * 100).round()}%'),
+                    Slider(
+                      value: s.pageZoom,
+                      min: 0.5,
+                      max: 2.5,
+                      divisions: 20,
+                      label: '${(s.pageZoom * 100).round()}%',
+                      onChanged: (v) async {
+                        await s.setZoom(v);
+                        setS(() {});
+                        await _applyZoomAll();
+                      },
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        for (final z in [0.75, 1.0, 1.25, 1.5, 2.0])
+                          ActionChip(
+                            label: Text('${(z * 100).round()}%'),
+                            onPressed: () async {
+                              await s.setZoom(z);
+                              setS(() {});
+                              await _applyZoomAll();
+                            },
+                          ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   void _openMenu() {
     final isBookmarked = _bookmarks.any((b) => b.url == tab.url);
     showModalBottomSheet(
@@ -481,7 +584,37 @@ class _BrowserHomeState extends State<BrowserHome> {
                     }
                   },
                 ),
+                
                 ListTile(
+                  leading: const Icon(Icons.auto_awesome),
+                  title: const Text('AI 办公助手'),
+                  subtitle: const Text('连接本地 Ollama / 兼容接口'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _openAi();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.zoom_in_rounded),
+                  title: const Text('页面缩放'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _openZoom();
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Theme.of(context).brightness == Brightness.dark
+                        ? Icons.light_mode_rounded
+                        : Icons.dark_mode_rounded,
+                  ),
+                  title: const Text('浅色 / 深色 / 跟随系统'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _openThemePicker();
+                  },
+                ),
+ListTile(
                   leading: const Icon(Icons.settings_outlined),
                   title: const Text('设置'),
                   onTap: () {
@@ -682,9 +815,54 @@ class _BrowserHomeState extends State<BrowserHome> {
                   }
                 },
               ),
+              ListTile(
+                title: const Text('本地 AI 地址'),
+                subtitle: Text(context.read<SettingsService>().aiBaseUrl),
+                onTap: () async {
+                  final s = context.read<SettingsService>();
+                  final c = TextEditingController(text: s.aiBaseUrl);
+                  final v = await showDialog<String>(
+                    context: ctx,
+                    builder: (d) => AlertDialog(
+                      title: const Text('AI Base URL'),
+                      content: TextField(
+                        controller: c,
+                        decoration: const InputDecoration(
+                          hintText: 'http://192.168.1.x:11434',
+                        ),
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(d), child: const Text('取消')),
+                        FilledButton(onPressed: () => Navigator.pop(d, c.text), child: const Text('保存')),
+                      ],
+                    ),
+                  );
+                  if (v != null && v.trim().isNotEmpty) await s.setAiBase(v.trim());
+                },
+              ),
+              ListTile(
+                title: const Text('AI 模型名'),
+                subtitle: Text(context.read<SettingsService>().aiModel),
+                onTap: () async {
+                  final s = context.read<SettingsService>();
+                  final c = TextEditingController(text: s.aiModel);
+                  final v = await showDialog<String>(
+                    context: ctx,
+                    builder: (d) => AlertDialog(
+                      title: const Text('模型'),
+                      content: TextField(controller: c, decoration: const InputDecoration(hintText: 'llama3.2')),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(d), child: const Text('取消')),
+                        FilledButton(onPressed: () => Navigator.pop(d, c.text), child: const Text('保存')),
+                      ],
+                    ),
+                  );
+                  if (v != null && v.trim().isNotEmpty) await s.setAiModel(v.trim());
+                },
+              ),
               const ListTile(
                 title: Text('Morph Browser'),
-                subtitle: Text('起始页 · 标签 · 无痕 · 收藏 · 历史 · 控制台 · 源码'),
+                subtitle: Text('起始页 · AI · 缩放 · 主题 · 标签 · 无痕 · 收藏 · 历史'),
               ),
             ],
           ),
@@ -724,6 +902,13 @@ class _BrowserHomeState extends State<BrowserHome> {
     final bookmarked = _bookmarks.any((b) => b.url == tab.url);
 
     return Scaffold(
+      floatingActionButton: isStartPage
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _openAi,
+              icon: const Icon(Icons.auto_awesome),
+              label: const Text('AI'),
+            ),
       body: SafeArea(
         child: Column(
           children: [
